@@ -1,0 +1,9 @@
+# This file is parsed as data. Shell expansion is not supported.
+TARGET_HOST=192.0.2.10
+TARGET_PORT=22
+TARGET_USER=operator
+TARGET_KEY=/etc/browser-ssh-broker/keys/default
+TARGET_KNOWN_HOSTS=/etc/browser-ssh-broker/known-hosts/default
+TARGET_REMOTE_HOME=/home/operator
+TARGET_UPLOAD_ROOT=/home/operator/uploads
+TARGET_DOWNLOAD_ROOT=/home/operator

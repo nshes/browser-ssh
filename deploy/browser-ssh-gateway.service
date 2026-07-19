@@ -1,0 +1,52 @@
+[Unit]
+Description=Browser SSH gateway
+Wants=network-online.target browser-ssh-broker.service
+After=network-online.target browser-ssh-broker.service
+ConditionPathExists=/home/browser-ssh/app/browser-ssh-gateway.jar
+ConditionPathExists=/etc/browser-ssh-gateway/browser-ssh.env
+
+[Service]
+Type=simple
+User=browser-ssh
+Group=browser-ssh
+WorkingDirectory=/home/browser-ssh
+Environment=HOME=/home/browser-ssh
+Environment=SHELL=/bin/bash
+EnvironmentFile=/etc/browser-ssh-gateway/browser-ssh.env
+ExecStart=/usr/bin/java -jar /home/browser-ssh/app/browser-ssh-gateway.jar
+Restart=on-failure
+RestartSec=5s
+SuccessExitStatus=143
+TimeoutStopSec=15s
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=true
+PrivateMounts=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProtectSystem=strict
+ReadOnlyPaths=/home/browser-ssh/app /home/browser-ssh/bin
+ReadWritePaths=/home/browser-ssh/.cache
+InaccessiblePaths=-/etc/browser-ssh-broker -/etc/cloudflared -/etc/cloudflared-browser-ssh -/etc/kolla -/etc/openstack-portal -/root -/run/user -/srv/ops -/var/lib/docker -/var/run/docker.sock
+LockPersonality=true
+MemoryHigh=512M
+MemoryMax=768M
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+TasksMax=128
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

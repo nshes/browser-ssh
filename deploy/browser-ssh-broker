@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_ROOT="${BROWSER_SSH_BROKER_CONFIG_ROOT:-/etc/browser-ssh-broker}"
+SSH_BIN="${BROWSER_SSH_BROKER_SSH_BIN:-/usr/bin/ssh}"
+MAX_UPLOAD_BYTES=104857600
+MAX_DOWNLOAD_BYTES=2147483648
+[[ "$SSH_BIN" == /* && -x "$SSH_BIN" ]] || { printf 'broker SSH client is unavailable\n' >&2; exit 1; }
+
+fail() {
+  printf '%s\n' "$1" >&2
+  exit "${2:-2}"
+}
+
+decode_path() {
+  local encoded="$1" padding
+  [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || fail 'invalid encoded path'
+  encoded="${encoded//-/+}"
+  encoded="${encoded//_/\/}"
+  padding=$(( (4 - ${#encoded} % 4) % 4 ))
+  printf '%s' "$encoded$(printf '%*s' "$padding" '' | tr ' ' '=')" | base64 -d
+}
+
+declare -A target_config=()
+load_target() {
+  local target="$1" file line key value
+  [[ "$target" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail 'invalid target id'
+  file="${CONFIG_ROOT}/targets/${target}.conf"
+  [[ -f "$file" && -r "$file" ]] || fail 'target is unavailable' 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" =~ ^([A-Z_]+)=(.*)$ ]] || fail 'invalid target configuration'
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    case "$key" in
+      TARGET_HOST|TARGET_PORT|TARGET_USER|TARGET_KEY|TARGET_KNOWN_HOSTS|TARGET_REMOTE_HOME|TARGET_UPLOAD_ROOT|TARGET_DOWNLOAD_ROOT) ;;
+      *) fail 'unknown target configuration key' ;;
+    esac
+    [[ -z "${target_config[$key]+x}" ]] || fail 'duplicate target configuration key'
+    target_config[$key]="$value"
+  done <"$file"
+}
+
+required() {
+  [[ -n "${target_config[$1]:-}" ]] || fail 'incomplete target configuration'
+}
+
+normalize_root() {
+  [[ "$1" == /* ]] || fail 'target root must be absolute'
+  realpath -m -- "$1"
+}
+
+require_within_root() {
+  local path="$1" root="$2"
+  [[ "$path" == "$root" || "$path" == "$root"/* ]] \
+    || fail 'remote path is outside the allowed root' 1
+}
+
+read -r version target mode max_bytes encoded_path extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$version" == "v1" && -z "${extra:-}" ]] || fail 'invalid broker request'
+[[ "$target" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail 'invalid target id'
+case "$mode" in
+  terminal|upload|inspect|download-file|download-archive) ;;
+  *) fail 'invalid mode' ;;
+esac
+[[ "$max_bytes" =~ ^[0-9]+$ ]] || fail 'invalid max bytes'
+if [[ "$mode" == "upload" ]]; then
+  (( max_bytes <= MAX_UPLOAD_BYTES )) || fail 'upload exceeds broker limit' 1
+else
+  (( max_bytes <= MAX_DOWNLOAD_BYTES )) || fail 'download exceeds broker limit' 1
+fi
+
+load_target "$target"
+for key in TARGET_HOST TARGET_PORT TARGET_USER TARGET_KEY TARGET_KNOWN_HOSTS \
+  TARGET_REMOTE_HOME TARGET_UPLOAD_ROOT TARGET_DOWNLOAD_ROOT; do
+  required "$key"
+done
+
+host="${target_config[TARGET_HOST]}"
+port="${target_config[TARGET_PORT]}"
+user="${target_config[TARGET_USER]}"
+key_path="${target_config[TARGET_KEY]}"
+known_hosts="${target_config[TARGET_KNOWN_HOSTS]}"
+[[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9.:%_-]{0,252}$ ]] || fail 'invalid target host'
+[[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || fail 'invalid target port'
+[[ "$user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail 'invalid target user'
+key_path="$(realpath -e -- "$key_path" 2>/dev/null || true)"
+known_hosts="$(realpath -e -- "$known_hosts" 2>/dev/null || true)"
+[[ "$key_path" == "${CONFIG_ROOT}/keys/"* && -f "$key_path" && -r "$key_path" ]] \
+  || fail 'target key is unavailable' 1
+[[ "$known_hosts" == "${CONFIG_ROOT}/known-hosts/"* && -f "$known_hosts" && -r "$known_hosts" ]] \
+  || fail 'target host key is unavailable' 1
+
+remote_home="$(normalize_root "${target_config[TARGET_REMOTE_HOME]}")"
+upload_root="$(normalize_root "${target_config[TARGET_UPLOAD_ROOT]}")"
+download_root="$(normalize_root "${target_config[TARGET_DOWNLOAD_ROOT]}")"
+[[ "$upload_root" == "$remote_home" || "$upload_root" == "$remote_home"/* ]] \
+  || fail 'upload root must be inside the remote home'
+[[ "$download_root" == "$remote_home" || "$download_root" == "$remote_home"/* ]] \
+  || fail 'download root must be inside the remote home'
+
+ssh_options=(
+  -F /dev/null
+  -p "$port"
+  -o BatchMode=yes
+  -o ClearAllForwardings=yes
+  -o ConnectTimeout=10
+  -o EscapeChar=none
+  -o ForwardAgent=no
+  -o GlobalKnownHostsFile=/dev/null
+  -o IdentitiesOnly=yes
+  -o IdentityFile="$key_path"
+  -o KbdInteractiveAuthentication=no
+  -o PasswordAuthentication=no
+  -o PermitLocalCommand=no
+  -o PreferredAuthentications=publickey
+  -o ServerAliveCountMax=2
+  -o ServerAliveInterval=30
+  -o StrictHostKeyChecking=yes
+  -o UserKnownHostsFile="$known_hosts"
+)
+
+if [[ "$mode" == "terminal" ]]; then
+  [[ "$encoded_path" == "-" ]] || fail 'terminal request must not include a path'
+  exec "$SSH_BIN" -tt "${ssh_options[@]}" -o RequestTTY=force "${user}@${host}"
+fi
+
+remote_path="$(decode_path "$encoded_path")"
+[[ -n "$remote_path" && "$remote_path" == /* && ${#remote_path} -le 255 ]] \
+  || fail 'invalid remote path'
+[[ "$remote_path" != *$'\n'* && "$remote_path" != *$'\r'* ]] || fail 'invalid remote path'
+remote_path="$(realpath -m -- "$remote_path")"
+if [[ "$mode" == "upload" ]]; then
+  policy_root="$upload_root"
+  require_within_root "$remote_path" "$upload_root"
+else
+  policy_root="$download_root"
+  require_within_root "$remote_path" "$download_root"
+fi
+
+printf -v quoted_path '%q' "$remote_path"
+printf -v quoted_policy_root '%q' "$policy_root"
+remote_guard="policy_root=${quoted_policy_root}; requested_path=${quoted_path}; resolved_root=\$(realpath -e -- \"\$policy_root\") || exit 1; resolved_path=\$(realpath -m -- \"\$requested_path\") || exit 1; case \"\$resolved_path\" in \"\$resolved_root\"|\"\$resolved_root\"/*) ;; *) printf 'remote path is outside the allowed root\\n' >&2; exit 1 ;; esac;"
+if [[ "$mode" == "upload" ]]; then
+  exec "$SSH_BIN" -T "${ssh_options[@]}" "${user}@${host}" \
+    "${remote_guard} umask 077; remote_dir=\$(dirname -- \"\$resolved_path\"); mkdir -p -- \"\$remote_dir\" && head -c ${max_bytes} > \"\$resolved_path\""
+fi
+
+if [[ "$mode" == "inspect" ]]; then
+  exec "$SSH_BIN" -T "${ssh_options[@]}" "${user}@${host}" \
+    "${remote_guard} set -o pipefail; if test -f \"\$resolved_path\" && test -r \"\$resolved_path\"; then printf 'FILE\\t%s\\t1\\n' \"\$(stat -Lc %s -- \"\$resolved_path\")\"; elif test -d \"\$resolved_path\" && test -r \"\$resolved_path\" && test -x \"\$resolved_path\"; then if find \"\$resolved_path\" \\( -type f ! -readable -o -type d ! -readable -o -type d ! -executable \\) -print -quit | grep -q .; then printf 'directory contains unreadable items\\n' >&2; exit 1; fi; find \"\$resolved_path\" -type f -printf '%s\\n' | awk '{ bytes += \$1; files += 1 } END { printf \"DIRECTORY\\t%.0f\\t%.0f\\n\", bytes, files }'; else printf 'remote item is unavailable or unreadable\\n' >&2; exit 1; fi"
+fi
+
+if [[ "$mode" == "download-file" ]]; then
+  exec "$SSH_BIN" -T "${ssh_options[@]}" "${user}@${host}" \
+    "${remote_guard} test -f \"\$resolved_path\" && test -r \"\$resolved_path\" && cat -- \"\$resolved_path\""
+fi
+
+exec "$SSH_BIN" -T "${ssh_options[@]}" "${user}@${host}" \
+  "${remote_guard} test -d \"\$resolved_path\" && test -r \"\$resolved_path\"; remote_dir=\$(dirname -- \"\$resolved_path\"); remote_name=\$(basename -- \"\$resolved_path\"); cd -- \"\$remote_dir\" && exec /usr/bin/zip -q -1 -r -y - -- \"\$remote_name\""

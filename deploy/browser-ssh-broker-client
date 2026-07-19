@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET=""
+MODE="terminal"
+REMOTE_PATH=""
+MAX_BYTES="104857600"
+BROKER_HOST="${BROWSER_SSH_BROKER_HOST:-127.0.0.1}"
+BROKER_PORT="${BROWSER_SSH_BROKER_PORT:-10022}"
+BROKER_USER="${BROWSER_SSH_BROKER_USER:-browser-ssh-broker}"
+BROKER_KEY="${BROWSER_SSH_BROKER_KEY:-/etc/browser-ssh-gateway/broker-client-key}"
+BROKER_KNOWN_HOSTS="${BROWSER_SSH_BROKER_KNOWN_HOSTS:-/etc/browser-ssh-gateway/broker-known-hosts}"
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --target)
+      TARGET="${2:-}"
+      shift 2
+      ;;
+    --mode)
+      MODE="${2:-}"
+      shift 2
+      ;;
+    --remote-path)
+      REMOTE_PATH="${2:-}"
+      shift 2
+      ;;
+    --max-bytes)
+      MAX_BYTES="${2:-}"
+      shift 2
+      ;;
+    *)
+      printf 'unknown broker client argument\n' >&2
+      exit 2
+      ;;
+  esac
+done
+
+[[ "$TARGET" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] \
+  || { printf 'invalid target id\n' >&2; exit 2; }
+case "$MODE" in
+  terminal|upload|inspect|download-file|download-archive) ;;
+  *) printf 'invalid mode\n' >&2; exit 2 ;;
+esac
+[[ "$MAX_BYTES" =~ ^[0-9]+$ ]] \
+  || { printf 'invalid max bytes\n' >&2; exit 2; }
+if [[ "$MODE" == "upload" && "$MAX_BYTES" -gt 104857600 ]]; then
+  printf 'invalid upload max bytes\n' >&2
+  exit 2
+fi
+if [[ "$MODE" != "upload" && "$MAX_BYTES" -gt 2147483648 ]]; then
+  printf 'invalid download max bytes\n' >&2
+  exit 2
+fi
+
+encoded_path="-"
+if [[ "$MODE" != "terminal" ]]; then
+  [[ -n "$REMOTE_PATH" && "$REMOTE_PATH" == /* ]] \
+    || { printf 'remote path must be absolute\n' >&2; exit 2; }
+  [[ ${#REMOTE_PATH} -le 255 ]] \
+    || { printf 'remote path is too long\n' >&2; exit 2; }
+  [[ "$REMOTE_PATH" != *$'\n'* && "$REMOTE_PATH" != *$'\r'* ]] \
+    || { printf 'invalid remote path\n' >&2; exit 2; }
+  encoded_path="$(printf '%s' "$REMOTE_PATH" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
+fi
+
+payload="v1 ${TARGET} ${MODE} ${MAX_BYTES} ${encoded_path}"
+ssh_options=(
+  -F /dev/null
+  -p "$BROKER_PORT"
+  -o BatchMode=yes
+  -o ClearAllForwardings=yes
+  -o ConnectTimeout=10
+  -o EscapeChar=none
+  -o ForwardAgent=no
+  -o GlobalKnownHostsFile=/dev/null
+  -o IdentitiesOnly=yes
+  -o IdentityFile="$BROKER_KEY"
+  -o KbdInteractiveAuthentication=no
+  -o PasswordAuthentication=no
+  -o PermitLocalCommand=no
+  -o PreferredAuthentications=publickey
+  -o ServerAliveCountMax=2
+  -o ServerAliveInterval=30
+  -o StrictHostKeyChecking=yes
+  -o UserKnownHostsFile="$BROKER_KNOWN_HOSTS"
+)
+
+if [[ "$MODE" == "terminal" ]]; then
+  exec /usr/bin/ssh -tt "${ssh_options[@]}" -o RequestTTY=force \
+    "${BROKER_USER}@${BROKER_HOST}" "$payload"
+fi
+exec /usr/bin/ssh -T "${ssh_options[@]}" \
+  "${BROKER_USER}@${BROKER_HOST}" "$payload"

@@ -1,0 +1,63 @@
+server:
+  address: 127.0.0.1
+  port: 9999
+  forward-headers-strategy: framework
+  error:
+    include-message: never
+    include-stacktrace: never
+
+management:
+  server:
+    address: 127.0.0.1
+    port: 9998
+  endpoints:
+    enabled-by-default: false
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      enabled: true
+      probes:
+        enabled: true
+
+spring:
+  application:
+    name: browser-ssh-gateway
+  threads:
+    virtual:
+      enabled: true
+  mvc:
+    async:
+      request-timeout: 2h
+  main:
+    banner-mode: "off"
+
+browser-ssh:
+  access:
+    team-domain: ${BROWSER_SSH_ACCESS_TEAM_DOMAIN}
+    audience: ${BROWSER_SSH_ACCESS_AUDIENCE}
+    public-origin: ${BROWSER_SSH_PUBLIC_ORIGIN}
+    allowed-emails: ${BROWSER_SSH_ALLOWED_EMAILS}
+  terminal:
+    command: ${BROWSER_SSH_COMMAND:/home/browser-ssh/bin/browser-ssh-broker-client}
+    home: ${BROWSER_SSH_HOME:/home/browser-ssh}
+    target-id: ${BROWSER_SSH_TARGET_ID:default}
+    idle-timeout: ${BROWSER_SSH_IDLE_TIMEOUT:PT15M}
+    max-session-duration: ${BROWSER_SSH_MAX_SESSION_DURATION:PT2H}
+    max-concurrent-sessions: ${BROWSER_SSH_MAX_CONCURRENT_SESSIONS:2}
+    max-input-characters: ${BROWSER_SSH_MAX_INPUT_CHARACTERS:16384}
+    max-messages-per-second: ${BROWSER_SSH_MAX_MESSAGES_PER_SECOND:300}
+  file-transfer:
+    max-concurrent-connections: ${BROWSER_SSH_MAX_TRANSFER_CONNECTIONS:2}
+    max-concurrent-operations: ${BROWSER_SSH_MAX_TRANSFER_OPERATIONS:2}
+    connection-idle-timeout: ${BROWSER_SSH_TRANSFER_IDLE_TIMEOUT:PT1M}
+  display:
+    target-name: ${BROWSER_SSH_TARGET_NAME:SSH target}
+    upload-path: ${BROWSER_SSH_UPLOAD_PATH:/home/operator/uploads/}
+    download-path: ${BROWSER_SSH_DOWNLOAD_PATH:/home/operator}
+
+logging:
+  level:
+    root: INFO
+    kim.mingyo.browserssh: INFO

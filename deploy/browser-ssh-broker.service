@@ -1,0 +1,35 @@
+[Unit]
+Description=Browser SSH target broker
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/browser-ssh-broker/sshd_config
+ConditionPathExists=/etc/browser-ssh-broker/authorized_keys
+
+[Service]
+Type=notify
+RuntimeDirectory=browser-ssh-broker
+RuntimeDirectoryMode=0750
+ExecStart=/usr/sbin/sshd -D -e -f /etc/browser-ssh-broker/sshd_config
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=on-failure
+RestartSec=5s
+
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/browser-ssh-broker
+ReadWritePaths=/run/browser-ssh-broker
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+SystemCallArchitectures=native
+TasksMax=128
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

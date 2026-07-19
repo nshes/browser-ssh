@@ -1,0 +1,45 @@
+[Unit]
+Description=Cloudflare Tunnel for Browser SSH Gateway
+After=network-online.target browser-ssh-gateway.service
+Wants=network-online.target browser-ssh-gateway.service
+
+[Service]
+Type=notify
+User=browser-ssh
+Group=browser-ssh
+Environment=HOME=/home/browser-ssh
+ExecStart=/usr/bin/cloudflared \
+  --no-autoupdate tunnel run \
+  --token-file /etc/cloudflared-browser-ssh/tunnel-token
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=20
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateDevices=true
+PrivateMounts=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProcSubset=pid
+InaccessiblePaths=-/etc/browser-ssh-gateway -/etc/browser-ssh-broker -/etc/cloudflared -/root -/var/lib/docker -/var/run/docker.sock
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+SystemCallArchitectures=native
+MemoryMax=256M
+TasksMax=64
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

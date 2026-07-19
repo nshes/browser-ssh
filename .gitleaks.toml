@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Verified minified xterm.js and ignored Maven build output."
+paths = [
+  '''^browser-ssh-gateway/src/main/resources/static/vendor/xterm/xterm\.js$''',
+  '''(^|/)target/'''
+]
